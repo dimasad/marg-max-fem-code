@@ -1,3 +1,12 @@
+# Ignore the script of test computations
+scratch.py
+
+# Ignore generated code
+Generated*Model_nx*_nu*_ny*.py
+
+# Ignore the data directory
+data/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
