@@ -32,6 +32,8 @@ class BaseProblem(optim.Problem):
         ny = model.ny
         ntx = model.ntx
         nty = model.nty
+        nt2x = nx * (2*nx + 1)
+        ntxy = (nx + ny) * (nx + ny + 1) // 2
         
         assert y.ndim == 2
         assert y.shape[1] == ny
@@ -65,21 +67,18 @@ class BaseProblem(optim.Problem):
         self.add_dependent_variable('xnext', xnext)
     
         # Register problem functions
-        nt2x = nx(2*nx + 1)
-        ntxy = (nx + ny)*(nx + ny + 1) // 2
-        
         self.add_constraint(model.dynamics, (N - 1, nx))
-        self.add_constraint(model.innovation, (N, ny))
+        self.add_constraint(model.measurements, (N, ny))
         self.add_constraint(model.pred_orthogonality, nt2x)
-        self.add_constraint(corr_orthogonality, ntxy)
-        self.add_constraint(pred_cov, (2*nx, 2*nx))
-        self.add_constraint(corr_cov, (nx + ny, nx + ny))
-        self.add_objective(wnmerit, N - 1)
-        self.add_objective(vnmerit, N)
-        self.add_objective(logdet_Q, ())
-        self.add_objective(logdet_Pp, ())
-        self.add_objective(logdet_R, ())
-        self.add_objective(logdet_marg, ())
+        self.add_constraint(model.corr_orthogonality, ntxy)
+        self.add_constraint(model.pred_cov, (2*nx, 2*nx))
+        self.add_constraint(model.corr_cov, (nx + ny, nx + ny))
+        self.add_objective(model.wnmerit, N - 1)
+        self.add_objective(model.vnmerit, N)
+        self.add_objective(model.logdet_Q, ())
+        self.add_objective(model.logdet_Pp, ())
+        self.add_objective(model.logdet_R, ())
+        self.add_objective(model.logdet_marg, ())
     
     def variables(self, dvec):
         """Get all variables needed to evaluate problem functions."""

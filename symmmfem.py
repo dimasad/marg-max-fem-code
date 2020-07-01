@@ -46,7 +46,7 @@ class BaseModel(symoptim.Model):
         po = [[f'pred_orth{i}_{j}' for j in range(2*nx)] for i in range(2*nx)]
         co = [[f'corr_orth{i}_{j}' for j in range(nx+ny)] for i in range(nx+ny)]
         v['pred_orth'] = po
-        v['corr_orth'] = bo
+        v['corr_orth'] = co
         self.decision.update({k for k in v if k != 'self'})
         
         # Define auxiliary variables
@@ -57,7 +57,7 @@ class BaseModel(symoptim.Model):
         
         # Register optimization functions
         self.add_constraint('dynamics')
-        self.add_constraint('innovation')
+        self.add_constraint('measurements')
         self.add_constraint('pred_orthogonality')
         self.add_constraint('corr_orthogonality')
         self.add_constraint('pred_cov')
@@ -76,7 +76,7 @@ class BaseModel(symoptim.Model):
     
     def measurements(self, y, x, u, vn, C, D, ybias, sR_tril):
         """Residuals of model measurements."""
-        sR = tril_mat(sRp_tril)
+        sR = tril_mat(sR_tril)
         return y - (C @ x + D @ u + ybias + sR @ vn)
     
     def pred_orthogonality(self, pred_orth):
