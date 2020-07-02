@@ -2,7 +2,8 @@
 
 Decision variables: x, wn, vn.
 Steady-state KF and marginalization gains obtained with equality constraints.
-Cholesky square roots used.
+SVD square root used for R
+Cholesky square roots used for the remaining variables.
 
 """
 
@@ -49,11 +50,11 @@ class Model(symoptim.Model):
         v['Kn'] = [[f'Kn{i}_{j}' for j in range(ny)] for i in range(nx)]
         v['Mn'] = [[f'Mn{i}_{j}' for j in range(nx)] for i in range(nx)]
         v['sQ_tril'] = [f'sQ{i}_{j}' for i,j in tril_ind(nx)]
-        v['sR_tril'] = [f'sR{i}_{j}' for i,j in tril_ind(ny)]
         v['sRp_tril'] = [f'sRp{i}_{j}' for i,j in tril_ind(ny)]
         v['sPp_tril'] = [f'sPp{i}_{j}' for i,j in tril_ind(nx)]
         v['sPc_tril'] = [f'sPc{i}_{j}' for i,j in tril_ind(nx)]
         v['sPr_tril'] = [f'sPr{i}_{j}' for i,j in tril_ind(nx)]
+        v['sR'] = [[f'sR{i}_{j}' for j in range(ny)] for i in range(ny)]
         po = [[f'pred_orth{i}_{j}' for j in range(2*nx)] for i in range(2*nx)]
         co = [[f'corr_orth{i}_{j}' for j in range(nx+ny)] for i in range(nx+ny)]
         v['pred_orth'] = po
@@ -71,6 +72,7 @@ class Model(symoptim.Model):
         self.add_constraint('measurements')
         self.add_constraint('pred_orthogonality')
         self.add_constraint('corr_orthogonality')
+        self.add_constraint('sR_orthogonality')
         self.add_constraint('pred_cov')
         self.add_constraint('corr_cov')
         self.add_objective('wnmerit')
@@ -85,9 +87,8 @@ class Model(symoptim.Model):
         sQ = tril_mat(sQ_tril)
         return xnext - (A @ xprev + B @ uprev + sQ @ wn)
     
-    def measurements(self, y, x, u, vn, C, D, ybias, sR_tril):
+    def measurements(self, y, x, u, vn, C, D, ybias, sR):
         """Residuals of model measurements."""
-        sR = tril_mat(sR_tril)
         return y - (C @ x + D @ u + ybias + sR @ vn)
     
     def pred_orthogonality(self, pred_orth):
@@ -97,6 +98,10 @@ class Model(symoptim.Model):
     def corr_orthogonality(self, corr_orth):
         resid = 0.5 * (corr_orth @ corr_orth.T - np.eye(self.nx + self.ny))
         return [resid[i] for i in tril_ind(self.nx + self.ny)]
+
+    def sR_orthogonality(self, sR):
+        prod = sR.T @ sR
+        return [prod[i] for i in tril_ind(self.ny)]
     
     def pred_cov(self, A, sPp_tril, sPc_tril, sPr_tril, sQ_tril, Mn, pred_orth):
         sPp = tril_mat(sPp_tril)
@@ -111,11 +116,10 @@ class Model(symoptim.Model):
                        [sPc,     zeros]])
         return M1 @ pred_orth - M2
     
-    def corr_cov(self, C, sR_tril, sRp_tril, sPp_tril, sPc_tril, Kn, corr_orth):
+    def corr_cov(self, C, sR, sRp_tril, sPp_tril, sPc_tril, Kn, corr_orth):
         sPp = tril_mat(sPp_tril)
         sPc = tril_mat(sPc_tril)
         sRp = tril_mat(sRp_tril)
-        sR = tril_mat(sR_tril)
         
         zeros = np.zeros((self.nx, self.ny))
         M1 = np.block([[sRp,  zeros.T],
@@ -142,10 +146,9 @@ class Model(symoptim.Model):
         sPp = tril_mat(sPp_tril)
         return  -sum(sympy.log(d) for d in sPp.diagonal())
 
-    def logdet_R(self, sR_tril, N):
+    def logdet_R(self, sR, N):
         """Merit of R log-determinant."""
-        sR = tril_mat(sR_tril)
-        return  -N * sum(sympy.log(d) for d in sR.diagonal())
+        return  -0.5 * N * sum(logs(sum(col**2)) for col  in sR.T)
     
     def logdet_marg(self, sPc_tril, sPr_tril, N):
         """Merit correction of state marginalization."""
@@ -157,9 +160,9 @@ class Model(symoptim.Model):
     
     @property
     def generate_assignments(self):
+        nty = self.ny * (self.ny + 1) // 2
         gen = {'nx': self.nx, 'nu': self.nu, 'ny': self.ny, 
-               'ntx': len(self.variables['sQ_tril']),
-               'nty': len(self.variables['sR_tril']),
+               'ntx': len(self.variables['sQ_tril']), 'nty': nty,
                **getattr(super(), 'generate_assignments', {})}
         return gen
 
@@ -201,7 +204,7 @@ class Problem(optim.Problem):
         # Register decision variables
         self.add_decision('ybias', ny)
         self.add_decision('sQ_tril', nty)
-        self.add_decision('sR_tril', nty)
+        self.add_decision('sR', (ny, ny))
         self.add_decision('sRp_tril', nty)
         self.add_decision('sPp_tril', ntx)
         self.add_decision('sPc_tril', ntx)
@@ -229,6 +232,7 @@ class Problem(optim.Problem):
         self.add_constraint(model.measurements, (N, ny))
         self.add_constraint(model.pred_orthogonality, nt2x)
         self.add_constraint(model.corr_orthogonality, ntxy)
+        self.add_constraint(model.sR_orthogonality, nty)
         self.add_constraint(model.pred_cov, (2*nx, 2*nx))
         self.add_constraint(model.corr_cov, (nx + ny, nx + ny))
         self.add_objective(model.wnmerit, N - 1)
@@ -261,6 +265,11 @@ def tril_mat(elem):
     return mat
 
 
+def logs(x, eps=1e-30):
+    """Symbolic logarithm with sentinel."""
+    return sympy.log(x + eps)
+
+
 def load_data():
     # Retrieve data
     d2r = np.pi / 180
@@ -286,7 +295,7 @@ def load_data():
     y_peak_to_peak = y.max(0) - y.min(0)
     #y[:, :] += y_peak_to_peak[:] * 3e-2 * np.random.randn(N, 2)
     
-    return t, u, y, yshift, yscale, ushift, uscale
+    return t, u, y, yshift, yscale, ushift, uscale, y_peak_to_peak
 
 
 def load_data2(yshift, yscale, ushift, uscale):
@@ -311,7 +320,7 @@ if __name__ == '__main__':
     ny = 2
     
     # Load experiment data
-    t, u, y, yshift, yscale, ushift, uscale = load_data()
+    t, u, y, yshift, yscale, ushift, uscale, y_peak_to_peak = load_data()
     t2, u2, y2 = load_data2(yshift, yscale, ushift, uscale)
     symmodel = Model(nx=nx, nu=nu, ny=ny)
     model = symmodel.compile_class()()
@@ -370,8 +379,8 @@ if __name__ == '__main__':
     var0['x'][:] = x0
     var0['vn'][:] = vn0
     var0['wn'][:] = wn0
+    var0['sR'][:] = sR0
     var0['sQ_tril'][:] = sQ0[np.tril_indices(nx)]
-    var0['sR_tril'][:] = sR0[np.tril_indices(ny)]
     var0['sRp_tril'][:] = sRp0[np.tril_indices(ny)]
     var0['sPp_tril'][:] = sPp0[np.tril_indices(nx)]
     var0['sPc_tril'][:] = sPc0[np.tril_indices(nx)]
@@ -388,12 +397,8 @@ if __name__ == '__main__':
     var_U['C'][:] = C
     var_L['D'][:] = 0
     var_U['D'][:] = 0
-    #var_L['sQ_tril'][~tril_diag(nx)] = 0
-    #var_U['sQ_tril'][~tril_diag(nx)] = 0
-    #var_L['sR_tril'][~tril_diag(ny)] = 0
-    #var_U['sR_tril'][~tril_diag(ny)] = 0
+    var_L['sR'][np.arange(ny), np.arange(ny)] = 1e-4
     var_L['sQ_tril'][tril_diag(nx)] = 1e-10
-    var_L['sR_tril'][tril_diag(ny)] = 1e-4
     var_L['sPc_tril'][tril_diag(nx)] = 1e-10
     var_L['sPp_tril'][tril_diag(nx)] = 1e-10
     var_L['sPr_tril'][tril_diag(nx)] = 1e-10
@@ -404,6 +409,8 @@ if __name__ == '__main__':
     constr_L, constr_U = constr_bounds
     var_constr_L = problem.unpack_constraints(constr_L)
     var_constr_U = problem.unpack_constraints(constr_U)
+    var_constr_L['sR_orthogonality'][tril_diag(ny)] = 1e-8
+    var_constr_U['sR_orthogonality'][tril_diag(ny)] = np.inf
     
     # Define problem scaling
     obj_scale = -1.0
@@ -415,7 +422,7 @@ if __name__ == '__main__':
     
     dec_scale = np.ones(problem.ndec)
     var_scale = problem.variables(dec_scale)
-    var_scale['sR_tril'][:] = 1e2
+    var_scale['sR'][:] = 1e2
     var_scale['sQ_tril'][:] = 1e2
     var_scale['sRp_tril'][:] = 1e2
     var_scale['sPp_tril'][:] = 1e2
@@ -450,7 +457,7 @@ if __name__ == '__main__':
     sPc = tril_mat(opt['sPc_tril'])
     sPr = tril_mat(opt['sPr_tril'])
     sQ = tril_mat(opt['sQ_tril'])
-    sR = tril_mat(opt['sR_tril'])
+    sR = opt['sR']
     
     yopt = xopt @ C.T + u @ D.T + ybias
     Pc = sPc @ sPc.T
