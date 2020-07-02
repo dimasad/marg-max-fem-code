@@ -3,7 +3,6 @@
 
 import numpy as np
 
-import scipy.special
 import sympy
 from ceacoest.modelling import symoptim
 
