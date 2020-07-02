@@ -284,7 +284,7 @@ def load_data():
     np.random.seed(0)
     N = len(y)
     y_peak_to_peak = y.max(0) - y.min(0)
-    #y[:, 0] += y_peak_to_peak[0] * 1e-3 * np.random.randn(N)
+    #y[:, :] += y_peak_to_peak[:] * 1e-3 * np.random.randn(N, 2)
     
     return t, u, y, yshift, yscale, ushift, uscale
 
@@ -393,7 +393,7 @@ if __name__ == '__main__':
     #var_L['sR_tril'][~tril_diag(ny)] = 0
     #var_U['sR_tril'][~tril_diag(ny)] = 0
     var_L['sQ_tril'][tril_diag(nx)] = 1e-10
-    var_L['sR_tril'][tril_diag(ny)] = 1e-10
+    var_L['sR_tril'][tril_diag(ny)] = 1e-4
     var_L['sPc_tril'][tril_diag(nx)] = 1e-10
     var_L['sPp_tril'][tril_diag(nx)] = 1e-10
     var_L['sPr_tril'][tril_diag(nx)] = 1e-10
