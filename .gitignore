@@ -2,7 +2,7 @@
 scratch.py
 
 # Ignore generated code
-Generated*Model_nx*_nu*_ny*.py
+generated*_nx*_nu*_ny*.py
 
 # Ignore the data directory
 data/
