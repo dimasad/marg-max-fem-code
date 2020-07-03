@@ -311,14 +311,15 @@ def estimate(model, datafile, matlab_est):
     W0 = np.diag(guess['gram'].ravel())
 
     x0, e0, yp0 = predict(guess, ye, ue)
-    R0 = e0.T @ e0
-    sR0 = np.linalg.cholesky(R0)
-    sW0 = np.sqrt(W0)
-    sQ0 = np.eye(nx) * 1
-    Q0 = sQ0 @ sQ0.T
-
     w0 = x0[1:] - x0[:-1] @ A0.T - ue[:-1] @ B0.T
     v0 = ye - x0 @ C0.T - ue @ D0.T
+
+    R0 = 1 / N * e0.T @ e0 
+    Q0 = 1 / N * w0.T @ w0 + 0.1 * np.eye(nx)    
+    sR0 = np.linalg.cholesky(R0)
+    sQ0 = np.linalg.cholesky(Q0)
+    sW0 = np.sqrt(W0)
+    
     wn0 = w0 @ np.linalg.inv(sQ0.T)
     vn0 = v0 @ np.linalg.inv(sR0.T)
     
@@ -407,25 +408,23 @@ def estimate(model, datafile, matlab_est):
     constr_scale = np.ones(problem.ncons)
     var_constr_scale = problem.unpack_constraints(constr_scale)
     var_constr_scale['measurements'][:] = 1
-    var_constr_scale['pred_cov'][:] = 1e2
-    var_constr_scale['corr_cov'][:] = 1e2
+    var_constr_scale['pred_cov'][:] = 1e1
+    var_constr_scale['corr_cov'][:] = 1e1
     
     dec_scale = np.ones(problem.ndec)
     var_scale = problem.variables(dec_scale)
-    var_scale['sR_tril'][:] = 1e2
-    var_scale['sQ_tril'][:] = 1e2
-    var_scale['sRp_tril'][:] = 1e2
-    var_scale['sPp_tril'][:] = 1e2
-    var_scale['sPc_tril'][:] = 1e2
-    var_scale['sPr_tril'][:] = 1e2
+    var_scale['sR_tril'][:] = 1e1
+    var_scale['sQ_tril'][:] = 1e1
+    var_scale['sRp_tril'][:] = 1e1
+    var_scale['sPp_tril'][:] = 1e1
+    var_scale['sPc_tril'][:] = 1e1
+    var_scale['sPr_tril'][:] = 1e1
     
     with problem.ipopt(dec_bounds, constr_bounds) as nlp:
-        nlp.add_str_option('linear_scaling_on_demand', 'no')
-        nlp.add_str_option('linear_system_scaling', 'mc19')
         nlp.add_str_option('linear_solver', 'ma57')
         nlp.add_num_option('ma57_pre_alloc', 100.0)
-        nlp.add_num_option('tol', 1e-8)
-        nlp.add_int_option('max_iter', 1000)
+        nlp.add_num_option('tol', 1e-6)
+        nlp.add_int_option('max_iter', 500)
         nlp.set_scaling(obj_scale, dec_scale, constr_scale)
         decopt, info = nlp.solve(dec0)
     
@@ -437,7 +436,7 @@ def estimate(model, datafile, matlab_est):
     A = opt['A']
     
     opt['L'] = A @ Kn @ isRp
-    opt['status'] = info['status']    
+    opt['status'] = info['status']
     return opt
 
 
@@ -538,7 +537,7 @@ if __name__ == '__main__':
         opt = estimate(model, datafile, matlab_est)
         
         savekeys = {
-            'A', 'B', 'C', 'D', 'Ln', 'sW_diag', 'S',
+            'A', 'B', 'C', 'D', 'L', 'sW_diag', 'Kn',
             'sRp_tril', 'sQ_tril', 'sR_tril', 'sPp_tril', 'status',
         }
         optsave = {k:v for k,v in opt.items() if k in savekeys}

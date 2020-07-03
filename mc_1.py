@@ -275,17 +275,18 @@ def estimate(model, datafile, matlab_est):
     B0 = guess['B']
     C0 = guess['C']
     D0 = guess['D']
+    
     x0, e0, yp0 = predict(guess, ye, ue)
-
-    R0 = e0.T @ e0
-    sR0 = np.linalg.cholesky(R0)
-    sQ0 = np.eye(nx) * 1
-    Q0 = sQ0 @ sQ0.T
-
     w0 = x0[1:] - x0[:-1] @ A0.T - ue[:-1] @ B0.T
-    v0 = ye - x0 @ C0.T - ue @ D0.T
+    
+    R0 = 1 / N * e0.T @ e0
+    Q0 = 1 / N * w0.T @ w0 + np.eye(nx) * 0.1
+    
+    sR0 = np.linalg.cholesky(R0)
+    sQ0 = np.linalg.cholesky(Q0)
+
     wn0 = w0 @ np.linalg.inv(sQ0.T)
-    vn0 = v0 @ np.linalg.inv(sR0.T)
+    vn0 = e0 @ np.linalg.inv(sR0.T)
     
     Pp0 = scipy.linalg.solve_discrete_are(A0.T, C0.T, Q0, R0)
     Rp0 = C0 @ Pp0 @ C0.T + R0
@@ -376,7 +377,7 @@ def estimate(model, datafile, matlab_est):
         nlp.add_str_option('linear_system_scaling', 'mc19')
         nlp.add_str_option('linear_solver', 'ma57')
         nlp.add_num_option('ma57_pre_alloc', 100.0)
-        nlp.add_num_option('tol', 1e-8)
+        nlp.add_num_option('tol', 1e-6)
         nlp.add_int_option('max_iter', 1000)
         nlp.set_scaling(obj_scale, dec_scale, constr_scale)
         decopt, info = nlp.solve(dec0)
