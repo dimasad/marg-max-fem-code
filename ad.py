@@ -44,10 +44,12 @@ def eig_jvp(primals, tangents):
     F = jnp.zeros_like(U)
     for i, j in np.ndindex(*F.shape):
         if i != j:
+            assert jnp.abs(D[j] - D[i]) > 1e-16
             F = F.at[i,j].set(1 / (D[j] - D[i]))
     
     Uinv_A_dot_U = jnp.linalg.solve(U, A_dot) @ U
     D_dot = jnp.diag(Uinv_A_dot_U)
     U_dot = U @ (F * Uinv_A_dot_U)
+    
     return (D, U), (D_dot, U_dot)
 

@@ -29,6 +29,7 @@ import ad
 jax.config.update("jax_enable_x64", True)
 
 
+# Reload modules to simplify testing
 for m in [ad]:
     importlib.reload(m)
 
@@ -60,18 +61,8 @@ class Model(symoptim.Model):
         v['B'] = [[f'B{i}_{j}' for j in range(nu)] for i in range(nx)]
         v['C'] = [[f'C{i}_{j}' for j in range(nx)] for i in range(ny)]
         v['D'] = [[f'D{i}_{j}' for j in range(nu)] for i in range(ny)]
-        v['Kn'] = [[f'Kn{i}_{j}' for j in range(ny)] for i in range(nx)]
-        v['Mn'] = [[f'Mn{i}_{j}' for j in range(nx)] for i in range(nx)]
         v['sQ_tril'] = [f'sQ{i}_{j}' for i,j in tril_ind(nx)]
         v['sR_tril'] = [f'sR{i}_{j}' for i,j in tril_ind(ny)]
-        v['sRp_tril'] = [f'sRp{i}_{j}' for i,j in tril_ind(ny)]
-        v['sPp_tril'] = [f'sPp{i}_{j}' for i,j in tril_ind(nx)]
-        v['sPc_tril'] = [f'sPc{i}_{j}' for i,j in tril_ind(nx)]
-        v['sPr_tril'] = [f'sPr{i}_{j}' for i,j in tril_ind(nx)]
-        po = [[f'pred_orth{i}_{j}' for j in range(2*nx)] for i in range(2*nx)]
-        co = [[f'corr_orth{i}_{j}' for j in range(nx+ny)] for i in range(nx+ny)]
-        v['pred_orth'] = po
-        v['corr_orth'] = co
         self.decision.update({k for k in v if k != 'self'})
         
         # Define auxiliary variables
@@ -83,16 +74,10 @@ class Model(symoptim.Model):
         # Register optimization functions
         self.add_constraint('dynamics')
         self.add_constraint('measurements')
-        self.add_constraint('pred_orthogonality')
-        self.add_constraint('corr_orthogonality')
-        self.add_constraint('pred_cov')
-        self.add_constraint('corr_cov')
         self.add_objective('wnmerit')
         self.add_objective('vnmerit')
         self.add_objective('logdet_Q')
         self.add_objective('logdet_R')
-        self.add_objective('logdet_Pp')
-        self.add_objective('logdet_marg')
     
     def dynamics(self, xnext, xprev, uprev, wn, A, B, sQ_tril):
         """Residuals of model dynamics."""
@@ -103,41 +88,7 @@ class Model(symoptim.Model):
         """Residuals of model measurements."""
         sR = tril_mat(sR_tril)
         return y - (C @ x + D @ u + ybias + sR @ vn)
-    
-    def pred_orthogonality(self, pred_orth):
-        resid = 0.5 * (pred_orth @ pred_orth.T - np.eye(2 * self.nx))
-        return [resid[i] for i in tril_ind(2 * self.nx)]
-    
-    def corr_orthogonality(self, corr_orth):
-        resid = 0.5 * (corr_orth @ corr_orth.T - np.eye(self.nx + self.ny))
-        return [resid[i] for i in tril_ind(self.nx + self.ny)]
-    
-    def pred_cov(self, A, sPp_tril, sPc_tril, sPr_tril, sQ_tril, Mn, pred_orth):
-        sPp = tril_mat(sPp_tril)
-        sPc = tril_mat(sPc_tril)
-        sPr = tril_mat(sPr_tril)
-        sQ = tril_mat(sQ_tril)
         
-        zeros = np.zeros(A.shape)
-        M1 = np.block([[sPp, zeros], 
-                       [Mn,  sPr]])
-        M2 = np.block([[A @ sPc, sQ], 
-                       [sPc,     zeros]])
-        return M1 @ pred_orth - M2
-    
-    def corr_cov(self, C, sR_tril, sRp_tril, sPp_tril, sPc_tril, Kn, corr_orth):
-        sPp = tril_mat(sPp_tril)
-        sPc = tril_mat(sPc_tril)
-        sRp = tril_mat(sRp_tril)
-        sR = tril_mat(sR_tril)
-        
-        zeros = np.zeros((self.nx, self.ny))
-        M1 = np.block([[sRp,  zeros.T],
-                       [Kn, sPc]])
-        M2 = np.block([[sR,    C @ sPp], 
-                       [zeros, sPp]])
-        return M1 @ corr_orth - M2
-    
     def wnmerit(self, wn):
         """Merit of normalized process noise."""
         return -0.5 * (wn ** 2).sum()
@@ -151,24 +102,11 @@ class Model(symoptim.Model):
         sQ = tril_mat(sQ_tril)
         return  -(N - 1) * sum(sympy.log(d) for d in sQ.diagonal())
 
-    def logdet_Pp(self, sPp_tril):
-        """Merit of initial state covariance log-determinant."""
-        sPp = tril_mat(sPp_tril)
-        return  -sum(sympy.log(d) for d in sPp.diagonal())
-
     def logdet_R(self, sR_tril, N):
         """Merit of R log-determinant."""
         sR = tril_mat(sR_tril)
         return  -N * sum(sympy.log(d) for d in sR.diagonal())
-    
-    def logdet_marg(self, sPc_tril, sPr_tril, N):
-        """Merit correction of state marginalization."""
-        sPc = tril_mat(sPc_tril)
-        sPr = tril_mat(sPr_tril)
-        log_det_sPc = sum(sympy.log(d) for d in sPc.diagonal())
-        log_det_sPr = sum(sympy.log(d) for d in sPr.diagonal())
-        return  (N-1) * log_det_sPr + log_det_sPc
-    
+        
     @property
     def generate_assignments(self):
         gen = {'nx': self.nx, 'nu': self.nu, 'ny': self.ny, 
@@ -216,7 +154,10 @@ def logdet_marg(A, C, sQ_tril, sR_tril, N, use_jax=False):
 
 
 logdet_marg_grad = jax.grad(logdet_marg, range(4))
-logdet_marg_hess = jax.jacfwd(logdet_marg_grad, range(4))
+logdet_marg_d2A = jax.jacfwd(lambda *a, **k: logdet_marg_grad(*a, **k)[0:], 0)
+logdet_marg_d2C = jax.jacfwd(lambda *a, **k: logdet_marg_grad(*a, **k)[1:], 1)
+logdet_marg_d2sQ = jax.jacfwd(lambda *a, **k: logdet_marg_grad(*a, **k)[2:], 2)
+logdet_marg_d2sR = jax.jacfwd(lambda *a, **k: logdet_marg_grad(*a, **k)[3:], 3)
 
 
 class LogDetMargObjective:
@@ -246,32 +187,76 @@ class LogDetMargObjective:
         grad['sR_tril'] = d_sR_tril
         return grad
 
-    @staticmethod
-    def hess_nnz(dec_shapes, out_shape):
-        pass
+    @classmethod
+    def hess_nnz(cls, dec_shapes, out_shape):
+        hess_ind = cls.hess_ind(dec_shapes, out_shape)
+        return sum(v[0].size for v in hess_ind.values())
     
     @staticmethod
     def hess_ind(dec_shapes, out_shape):
-        pass
-
+        # Retrieve variable dimensions
+        ny, nx = dec_shapes['C']
+        ntx, = dec_shapes['sQ_tril']
+        nty, = dec_shapes['sR_tril']
+        nA = nx ** 2
+        nC = ny * nx
+        
+        # Build output dictionary
+        hess = collections.OrderedDict()
+        hess['A', 'A'] = np.tril_indices(nA)
+        hess['C', 'A'] = [np.repeat(np.arange(nC), nA),
+                          np.tile(np.arange(nA), nC)]
+        hess['sQ_tril', 'A'] = [np.repeat(np.arange(ntx), nA),
+                                np.tile(np.arange(nA), ntx)]
+        hess['sR_tril', 'A'] = [np.repeat(np.arange(nty), nA),
+                                np.tile(np.arange(nA), nty)]
+        hess['C', 'C'] = np.tril_indices(ny*nx)
+        hess['sQ_tril', 'C'] = [np.repeat(np.arange(ntx), nC),
+                                np.tile(np.arange(nC), ntx)]
+        hess['sR_tril', 'C'] = [np.repeat(np.arange(nty), nC),
+                                np.tile(np.arange(nC), nty)]
+        hess['sQ_tril', 'sQ_tril'] = np.tril_indices(ntx)
+        hess['sR_tril', 'sQ_tril'] = [np.repeat(np.arange(nty), ntx),
+                                      np.tile(np.arange(ntx), nty)]
+        hess['sR_tril', 'sR_tril'] = np.tril_indices(nty)
+        
+        # Convert to ndarray and return
+        for k, v in hess.items():
+            hess[k] = np.asarray(v)
+        return hess
+    
     @staticmethod
     def hess_val(*args, **kwargs):
         # Ensure jax is used
         args = args[:5]
         kwargs['use_jax'] = True
-
-        # Compute Hessian
-        d_A, d_C, d_sQ_tril, d_sR_tril = logdet_marg_hess(*args, **kwargs)
-        d_A_A, d_A_C, d_A_sQ_tril, d_A_sR_tril = d_A
         
-        ############### remove unnecessary cross terms
-
+        # Compute Hessian
+        d_A_A, d_C_A, d_sQ_A, d_sR_A, = logdet_marg_d2A(*args,**kwargs)
+        d_C_C, d_sQ_C, d_sR_C, = logdet_marg_d2C(*args,**kwargs)
+        d_sQ_sQ, d_sR_sQ, = logdet_marg_d2sQ(*args,**kwargs)
+        d_sR_sR, = logdet_marg_d2sR(*args,**kwargs)
+        
+        # Get shapes
+        C = kwargs.get('C') or args[1]
+        sQ_tril = kwargs.get('sQ_tril') or args[2]
+        sR_tril = kwargs.get('sR_tril') or args[3]
+        ny, nx = C.shape
+        ntx = sQ_tril.size
+        nty = sR_tril.size
+        
         # Build output dictionary
         hess = collections.OrderedDict()
-        hess['A', 'A'] = 
-        hess['C'] = d_C
-        hess['sQ_tril'] = d_sQ_tril
-        hess['sR_tril'] = d_sR_tril
+        hess['A', 'A'] = d_A_A.reshape(nx**2, nx**2)[np.tril_indices(nx**2)]
+        hess['C', 'A'] = d_C_A
+        hess['sQ_tril', 'A'] = d_sQ_A
+        hess['sR_tril', 'A'] = d_sR_A
+        hess['C', 'C'] = d_C_C.reshape(ny*nx, ny*nx)[np.tril_indices(ny*nx)]
+        hess['sQ_tril', 'C'] = d_sQ_C
+        hess['sR_tril', 'C'] = d_sR_C
+        hess['sQ_tril', 'sQ_tril'] = d_sQ_sQ[np.tril_indices(ntx)]
+        hess['sR_tril', 'sQ_tril'] = d_sR_sQ
+        hess['sR_tril', 'sR_tril'] = d_sR_sR[np.tril_indices(nty)]
         return hess
 
 
@@ -313,20 +298,12 @@ class Problem(optim.Problem):
         self.add_decision('ybias', ny)
         self.add_decision('sQ_tril', nty)
         self.add_decision('sR_tril', nty)
-        self.add_decision('sRp_tril', nty)
-        self.add_decision('sPp_tril', ntx)
-        self.add_decision('sPc_tril', ntx)
-        self.add_decision('sPr_tril', ntx)
         self.add_decision('A', (nx, nx))
         self.add_decision('B', (nx, nu))
         self.add_decision('C', (ny, nx))
         self.add_decision('D', (ny, nu))
-        self.add_decision('Kn', (nx, ny))
-        self.add_decision('Mn', (nx, ny))
         self.add_decision('vn', (N, ny))
         self.add_decision('wn', (N - 1, nx))
-        self.add_decision('pred_orth', (2*nx, 2*nx))
-        self.add_decision('corr_orth', (nx + ny, nx + ny))
         x = self.add_decision('x', (N, nx))
         
         # Define and register dependent variables
@@ -338,16 +315,11 @@ class Problem(optim.Problem):
         # Register problem functions
         self.add_constraint(model.dynamics, (N - 1, nx))
         self.add_constraint(model.measurements, (N, ny))
-        self.add_constraint(model.pred_orthogonality, nt2x)
-        self.add_constraint(model.corr_orthogonality, ntxy)
-        self.add_constraint(model.pred_cov, (2*nx, 2*nx))
-        self.add_constraint(model.corr_cov, (nx + ny, nx + ny))
         self.add_objective(model.wnmerit, N - 1)
         self.add_objective(model.vnmerit, N)
         self.add_objective(model.logdet_Q, ())
-        self.add_objective(model.logdet_Pp, ())
         self.add_objective(model.logdet_R, ())
-        self.add_objective(model.logdet_marg, ())
+        self.add_objective(LogDetMargObjective(), ())
     
     def variables(self, dvec):
         """Get all variables needed to evaluate problem functions."""
@@ -424,8 +396,6 @@ def load_data2(yshift, yscale, ushift, uscale):
 
 
 if __name__ == '__main__':
-    raise SystemExit
-
     nx = 2
     nu = 1
     ny = 2
@@ -441,42 +411,19 @@ if __name__ == '__main__':
     N = len(y)
     
     # Compute initial guess
-    sQ0 = np.eye(nx) * 1
-    sR0 = np.eye(ny) * 1e-1
+    np.random.seed(0)
+    sQ0 = np.eye(nx) * 1 + np.diag(np.random.rand(nx)) * 0.1
+    sR0 = np.eye(ny) * 1e-1 + np.diag(np.random.rand(nx)) * 0.1
     Q0 = sQ0 @ sQ0.T
     R0 = sR0 @ sR0.T
     A0 = np.eye(nx)
     C = np.eye(nx)
-    
+    sQ0_tril = sQ0[np.tril_indices(nx)]
+    sR0_tril = sR0[np.tril_indices(ny)]
+        
     vn0 = np.zeros((N, ny))
     x0 = y - vn0 @ sR0.T
     wn0 = (x0[1:] - x0[:-1] @ A0.T) @ np.linalg.inv(sQ0.T)
-    
-    Pp0 = scipy.linalg.solve_discrete_are(A0.T, C.T, Q0, R0)
-    Rp0 = C @ Pp0 @ C.T + R0
-    iRp0 = np.linalg.inv(Rp0)
-    K0 = Pp0 @ C.T @ iRp0
-    Pc0 = (np.eye(nx) - K0 @ C) @ Pp0
-    sPp0 = np.linalg.cholesky(Pp0)
-    sPc0 = np.linalg.cholesky(Pc0)
-    
-    z = np.zeros_like(A0)
-    pred_mat = np.block([[A0 @ sPc0, sQ0],
-                         [sPc0,      z]])
-    q, r = np.linalg.qr(pred_mat.T)
-    s = np.sign(r.diagonal())
-    pred_orth0 = (q * s).T
-    sPr0 = (r.T * s)[nx:, nx:]
-    Mn0 = (r.T * s)[nx:, :nx]
-
-    z = np.zeros_like(K0)
-    corr_mat = np.block([[sR0, C @ sPp0],
-                         [z,   sPp0]])
-    q, r = np.linalg.qr(corr_mat.T)
-    s = np.sign(r.diagonal())
-    corr_orth0 = (q * s).T
-    sRp0 = (r.T * s)[:ny, :ny]
-    Kn0 = (r.T * s)[ny:, :ny]
     
     # Set initial guess
     dec0 = np.zeros(problem.ndec)
@@ -485,20 +432,12 @@ if __name__ == '__main__':
     var0['B'][:] = np.zeros((nx, nu))
     var0['C'][:] = C
     var0['D'][:] = 0
-    var0['Kn'][:] = Kn0
-    var0['Mn'][:] = Mn0
     var0['x'][:] = x0
     var0['vn'][:] = vn0
     var0['wn'][:] = wn0
-    var0['sQ_tril'][:] = sQ0[np.tril_indices(nx)]
-    var0['sR_tril'][:] = sR0[np.tril_indices(ny)]
-    var0['sRp_tril'][:] = sRp0[np.tril_indices(ny)]
-    var0['sPp_tril'][:] = sPp0[np.tril_indices(nx)]
-    var0['sPc_tril'][:] = sPc0[np.tril_indices(nx)]
-    var0['sPr_tril'][:] = sPr0[np.tril_indices(nx)]
-    var0['pred_orth'][:] = pred_orth0
-    var0['corr_orth'][:] = corr_orth0
-
+    var0['sQ_tril'][:] = sQ0_tril
+    var0['sR_tril'][:] = sR0_tril
+    
     # Define bounds for decision variables
     dec_bounds = np.repeat([[-np.inf], [np.inf]], problem.ndec, axis=-1)
     dec_L, dec_U = dec_bounds
@@ -514,10 +453,6 @@ if __name__ == '__main__':
     #var_U['sR_tril'][~tril_diag(ny)] = 0
     var_L['sQ_tril'][tril_diag(nx)] = 1e-10
     var_L['sR_tril'][tril_diag(ny)] = 1e-4
-    var_L['sPc_tril'][tril_diag(nx)] = 1e-10
-    var_L['sPp_tril'][tril_diag(nx)] = 1e-10
-    var_L['sPr_tril'][tril_diag(nx)] = 1e-10
-    var_L['sRp_tril'][tril_diag(ny)] = 0
     
     # Define bounds for constraints
     constr_bounds = np.zeros((2, problem.ncons))
@@ -530,17 +465,11 @@ if __name__ == '__main__':
     constr_scale = np.ones(problem.ncons)
     var_constr_scale = problem.unpack_constraints(constr_scale)
     var_constr_scale['measurements'][:] = 1
-    var_constr_scale['pred_cov'][:] = 1e2
-    var_constr_scale['corr_cov'][:] = 1e2
     
     dec_scale = np.ones(problem.ndec)
     var_scale = problem.variables(dec_scale)
     var_scale['sR_tril'][:] = 1e2
     var_scale['sQ_tril'][:] = 1e2
-    var_scale['sRp_tril'][:] = 1e2
-    var_scale['sPp_tril'][:] = 1e2
-    var_scale['sPc_tril'][:] = 1e2
-    var_scale['sPr_tril'][:] = 1e2
     
     with problem.ipopt(dec_bounds, constr_bounds) as nlp:
         nlp.add_str_option('linear_scaling_on_demand', 'no')
@@ -560,24 +489,12 @@ if __name__ == '__main__':
     B = opt['B']
     C = opt['C']
     D = opt['D']
-    Kn = opt['Kn']
-    Mn = opt['Mn']
     ybias = opt['ybias']
-    pred_orth = opt['pred_orth']
-    corr_orth = opt['corr_orth']
-    sRp = tril_mat(opt['sRp_tril'])
-    sPp = tril_mat(opt['sPp_tril'])
-    sPc = tril_mat(opt['sPc_tril'])
-    sPr = tril_mat(opt['sPr_tril'])
     sQ = tril_mat(opt['sQ_tril'])
     sR = tril_mat(opt['sR_tril'])
     
     yopt = xopt @ C.T + u @ D.T + ybias
-    Pc = sPc @ sPc.T
-    Pp = sPp @ sPp.T
-    Pr = sPr @ sPr.T
-    Rp = sRp @ sRp.T
     Q = sQ @ sQ.T
     R = sR @ sR.T
-
+    
     Ac = scipy.linalg.logm(A) / model.dt
